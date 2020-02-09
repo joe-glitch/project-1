@@ -1,0 +1,135 @@
+PrintWriter output;
+import processing.serial.*;    // serial library to communicate with the Arduino 
+Serial myPort;      // Initializing for serial communication
+
+String reading ;  
+String[] nums;
+float heartRate =0;
+float spo2=0;
+float gsr = 0;
+float count = 0;
+float avgHR=0;
+float avgSP=0;
+float avgGSR =0;
+float incHR=0;
+float incSP=0;
+float incGSR=0;
+float stressLvl=0;
+float hr_weight = 0.5;
+float spo2_weight = 0.2;
+float gsr_weight = 0.3;
+
+
+
+void setup ( ) {
+
+  size (1600, 720);
+  background(0);
+
+  myPort  =  new Serial (this, "COM6", 115200); // Set the com port and the baud rate according to the Arduino IDE
+
+  myPort.bufferUntil ( '\n' );   // Receiving the data from the Arduino IDE
+
+  // Create a new file in the sketch directory
+  output = createWriter("data.csv");
+} 
+
+void serialEvent  (Serial myPort) {
+
+  reading =  myPort.readStringUntil ( '\n' )  ; 
+  if (reading != null) {
+    //println(reading);
+    output.println(reading); 
+    nums = split(reading, ',');
+  }
+  heartRate = float (nums[0]);
+  spo2 = float (nums[1]);
+  gsr = float (nums[2]);
+
+
+  if (count<10) {
+    avgHR = heartRate + avgHR;
+    avgSP = avgSP + spo2;
+    avgGSR = gsr +avgGSR;
+    count++;
+  } else if (count == 10) {
+    avgHR = avgHR/10 ;
+    avgSP = avgSP/10 ;
+    avgGSR = avgGSR/10 ;
+    count++;
+  } else if (count>10) {
+    incHR= avgHR - heartRate;
+    incSP = spo2 - avgSP;
+    incGSR = avgGSR - gsr;
+  }
+
+  incHR = (incHR/avgHR)*100*hr_weight;
+  incSP = (incSP/avgSP)*100*spo2_weight;
+  incGSR = (incGSR/avgGSR)*100*spo2_weight;
+  stressLvl = round(incGSR + incHR + incSP);
+  print("stress level = ");
+  print(stressLvl);
+  print(" heart rate = ");
+  print(heartRate);
+  print("bpm Spo2 = ");
+  print(spo2);
+  print("% GSR = ");
+  print(gsr);
+  println("ohm");
+}
+void draw() {
+  if (count<=10) {
+    background(0);
+    fill (0);
+    colorMode(RGB, 255, 255, 255);
+    noStroke();
+    ellipse(360, 360, width/2, height/2);
+    fill(255);
+    textAlign(CENTER);
+    textSize(50);
+    text("Calibrating", width/2, height/2);
+    stroke(255);
+    strokeWeight(10);
+    noFill();
+    arc(800, 360, 360, 360, 0, count*PI/5);
+  } else if (count >10) {
+    background(0);
+    noStroke();
+    textAlign(CENTER);
+    textSize(40);
+    fill(255);
+    text ("10", 1475, 450);
+    text ("0", 800, 450);
+    text ("-10", 125, 450);
+    text ("Stress Meter", width/2, 50);
+    for (int i= 0; i<19; i++) {
+      fill (150);
+      rectMode (CENTER);
+      rect(125+75*i, height / 2, 50, 100);
+    }
+    colorMode(HSB, 360, 100, 100);
+    if (stressLvl >0) {
+      for (int i=0; i<stressLvl; i++) {
+        strokeWeight(4);
+        rectMode(CENTER);
+        fill((130-13*i), 100, 100);
+        rect(width/2 + 75*i, (height / 2), 50, 100);
+      }
+    } else if (stressLvl <0) {
+
+      for (int i=0; -i>stressLvl; i++) {
+        strokeWeight(4);
+        rectMode(CENTER);
+        fill((100+13*i), 100, 100);
+        rect(width /2 -75*(i), (height / 2), 50, 100);
+      }
+    }
+  }
+}
+
+
+void mousePressed() {
+  output.flush(); // Writes the remaining data to the file
+  output.close(); // Finishes the file
+  exit(); // Stops the program
+}

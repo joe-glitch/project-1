@@ -1,0 +1,305 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include "MAX30100_PulseOximeter.h"
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); // set the LCD address to 0x27 for a 16 chars and 2 line display
+
+#define REPORTING_PERIOD_MS 1000
+
+PulseOximeter pox;
+const int GSR = A1;
+float sensorValue = 0;
+float gsr_average = 0;
+uint32_t tsLastReport = 0;
+float heartRate = 0;
+float spo2 = 0;
+float gsr = 0;
+float avgHR = 0;
+float avgSP = 0;
+float avgGSR = 0;
+float incHR = 0;
+float incSP = 0;
+float incGSR = 0;
+float stressLvl = 0;
+int count = 0;
+int ready = 0;
+
+//sub functions
+void initcalibration();
+void initSensor();
+void calibration();
+void stressLevel();
+void display();
+void unity();
+
+const byte interruptPin = 7; //on arduino leonardo the interrupt pins are 0,1,2,3,7 choose on of those
+
+void setup()
+{
+  pinMode(interruptPin, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(interruptPin), initcalibration, RISING);
+  Serial.begin(115200);
+  //while (!Serial)
+  //;
+  Serial.print(F("Initializing pulse oximeter.."));
+  lcd.init(); // initialize the lcd
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print(F("Initializing..."));
+  lcd.setCursor(0, 1);
+  lcd.print(F("  Stress meter  "));
+
+  delay(3000);
+  lcd.clear();
+  initSensor();
+}
+
+void loop()
+{
+  float sum = 0;
+  for (float i = 0; i < 10; i++) //Average the 10 measurements to remove the glitch
+  {
+    sensorValue = analogRead(GSR);
+    sum += sensorValue;
+    delay(1);
+  }
+  gsr_average = sum / 10;
+  gsr_average = ((1024 + (2 * gsr_average)) * 10000) / (512 - gsr_average);
+
+  gsr = gsr_average;
+  heartRate = pox.getHeartRate();
+  spo2 = pox.getSpO2();
+
+  // if (spo2 == 0)
+  // { // if heart rate sensor glitches try again
+  //   return;
+  // }
+
+  //   Make sure to call update as fast as possible
+  pox.update();
+  if (millis() - tsLastReport > REPORTING_PERIOD_MS)
+  {
+    calibration();
+    stressLevel();
+    display();
+    unity();
+
+    count++;
+    tsLastReport = millis();
+  }
+}
+
+void initSensor()
+{
+  // Initialize the PulseOximeter instance
+  // Failures are generally due to an improper I2C wiring, missing power supply
+  // or wrong target chip
+  if (!pox.begin())
+  {
+    Serial.println(F("FAILED"));
+    lcd.print(F("FAILED"));
+    lcd.setCursor(0, 1);
+    lcd.print(F("CHECK SENSOR!"));
+    for (;;)
+      ;
+  }
+  else
+  {
+    Serial.println(F("SUCCESS"));
+    lcd.print(F("SUCCESS"));
+  }
+  pox.setIRLedCurrent(MAX30100_LED_CURR_7_6MA);
+}
+
+void calibration()
+{
+  //calibrating sequence
+  if (count < 5)
+  { // skipping first few measurements as they are stable
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(F("calibrating."));
+  }
+  else if (count > 5 && count < 15)
+  {
+    avgHR = heartRate + avgHR;
+    avgSP = avgSP + spo2;
+    avgGSR = gsr + avgGSR;
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(F("calibrating.."));
+  }
+  else if (count == 15)
+  {
+    avgHR = avgHR / 10;
+    avgSP = avgSP / 10;
+    avgGSR = avgGSR / 10;
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(F("calibrating..."));
+  }
+
+  lcd.setCursor(0, 1);
+  lcd.print(((count * 6.66) + 0.1));
+  lcd.print(F("%"));
+}
+
+void stressLevel()
+{
+  //Calculate stress level
+  if (count > 15)
+  {
+    incHR = heartRate - avgHR; // heart rate increase with stress
+    incSP = avgSP - spo2;      // spo2 decreases
+    incGSR = gsr - avgGSR;     // gsr decrease
+
+    stressLvl = 0;
+    if (incSP > 0)
+    {
+      stressLvl = stressLvl + 1;
+    }
+    if (incGSR > 100 && incGSR < 200)
+    {
+      stressLvl = stressLvl + 1.5;
+    }
+    else if (incGSR > 200)
+    {
+      stressLvl = stressLvl + 3;
+    }
+    if (incHR > 5 && incHR < 10)
+    {
+      stressLvl = stressLvl + 1;
+    }
+    else if (incHR > 5 && incHR < 10)
+    {
+      stressLvl = stressLvl + 2;
+    }
+    else if (incHR > 10 && incHR < 15)
+    {
+      stressLvl = stressLvl + 3;
+    }
+    else if (incHR > 15 && incHR < 20)
+    {
+      stressLvl = stressLvl + 4;
+    }
+    else if (incHR > 20 && incHR < 25)
+    {
+      stressLvl = stressLvl + 5;
+    }
+    else if (incHR > 25 && incHR < 30)
+    {
+      stressLvl = stressLvl + 6;
+    }
+  }
+}
+
+void display()
+{
+  //print data to LCD
+  if (count > 15)
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(F("Stress lvl:"));
+    lcd.print(stressLvl);
+    lcd.setCursor(0, 1);
+    lcd.print(F("BPM:"));
+    lcd.print(pox.getHeartRate());
+    lcd.print(" ");
+    lcd.print(F("GSR:"));
+    lcd.print(gsr);
+  }
+}
+
+void unity()
+{
+  if (count > 15)
+  {
+    // sending stress level to unity
+    if (stressLvl == 1)
+    {
+      Serial.print("1");
+      Serial.write(1);
+      Serial.flush();
+      delay(20);
+    }
+    else if (stressLvl == 2)
+    {
+      Serial.print("2");
+      Serial.write(2);
+      Serial.flush();
+      delay(20);
+    }
+    else if (stressLvl == 3)
+    {
+      Serial.print("3");
+      Serial.write(3);
+      Serial.flush();
+      delay(20);
+    }
+    else if (stressLvl == 4)
+    {
+      Serial.print("4");
+      Serial.write(4);
+      Serial.flush();
+      delay(20);
+    }
+    else if (stressLvl == 5)
+    {
+      Serial.print("5");
+      Serial.write(5);
+      Serial.flush();
+      delay(20);
+    }
+    else if (stressLvl == 6)
+    {
+      Serial.print("6");
+      Serial.write(6);
+      Serial.flush();
+      delay(20);
+    }
+    else if (stressLvl == 7)
+    {
+      Serial.print("7");
+      Serial.write(7);
+      Serial.flush();
+      delay(20);
+    }
+    else if (stressLvl == 8)
+    {
+      Serial.print("8");
+      Serial.write(8);
+      Serial.flush();
+      delay(20);
+    }
+    else if (stressLvl == 9)
+    {
+      Serial.print("9");
+      Serial.write(9);
+      Serial.flush();
+      delay(20);
+    }
+    else if (stressLvl == 10)
+    {
+      Serial.print("10");
+      Serial.write(10);
+      Serial.flush();
+      delay(20);
+    }
+  }
+}
+
+void initcalibration()
+{
+  if (digitalRead(interruptPin) == HIGH)
+  {
+    count = 0;
+    avgHR = 0;
+    avgSP = 0;
+    avgGSR = 0;
+    gsr = 0;
+    heartRate = 0;
+  }
+}
